@@ -1,0 +1,6 @@
+name: "Python security training demo"
+queries:
+  - uses: security-extended
+paths:
+  - src
+  - security-demos/codeql

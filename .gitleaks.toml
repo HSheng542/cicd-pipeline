@@ -1,0 +1,11 @@
+title = "DevSecOps demo baseline configuration"
+
+[extend]
+useDefault = true
+
+# Intentional training findings are not part of a production scan. The demo
+# workflow swaps in .gitleaks-demo.toml to prove the gate detects them.
+[allowlist]
+  paths = [
+    '''security-demos/.*''',
+  ]

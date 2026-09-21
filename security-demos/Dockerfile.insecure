@@ -1,0 +1,4 @@
+# DEMO ONLY: intentionally obsolete base image and root user, for a Trivy gate demo.
+FROM python:3.9.0-slim
+RUN pip install flask==1.0.0
+CMD ["python", "-c", "print('training image')"]

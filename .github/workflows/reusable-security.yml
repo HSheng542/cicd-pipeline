@@ -1,0 +1,233 @@
+name: Reusable DevSecOps Security Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      image_name:
+        description: "Local image name to build and scan."
+        required: false
+        default: "application"
+        type: string
+      demo_mode:
+        description: "Scan the isolated, intentionally insecure training fixtures."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+  security-events: write
+
+jobs:
+  quality:
+    name: Lint and unit tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install application and test tools
+        run: python -m pip install --upgrade pip && python -m pip install ".[dev]"
+      - name: Lint
+        run: python -m ruff check src tests
+      - name: Unit tests
+        run: python -m pytest -q
+
+  gitleaks:
+    name: Secret scan (Gitleaks)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect committed secrets
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: ${{ inputs.demo_mode && '.gitleaks-demo.toml' || '.gitleaks.toml' }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+          GITLEAKS_ENABLE_SUMMARY: "true"
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"
+
+  codeql:
+    name: SAST (CodeQL)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: python
+          build-mode: none
+          config-file: ${{ inputs.demo_mode && '.github/codeql/codeql-demo-config.yml' || '.github/codeql/codeql-config.yml' }}
+      - name: Analyze source code
+        id: analyze
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:python"
+          output: reports/codeql
+      - name: Enforce CodeQL severity gate
+        if: always()
+        env:
+          SARIF_DIRECTORY: ${{ steps.analyze.outputs.sarif-output }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report_root = Path(os.environ["SARIF_DIRECTORY"])
+          reports = list(report_root.rglob("*.sarif"))
+          if not reports:
+              raise SystemExit("No CodeQL SARIF report was produced.")
+
+          blocked = []
+          for report in reports:
+              for run in json.loads(report.read_text(encoding="utf-8"))["runs"]:
+                  for result in run.get("results", []):
+                      properties = result.get("properties", {})
+                      severity = float(properties.get("security-severity", 0) or 0)
+                      if result.get("level") == "error" or severity >= 7.0:
+                          blocked.append(result.get("ruleId", "unknown-rule"))
+
+          print(f"CodeQL reports: {len(reports)}; blocked findings: {len(blocked)}")
+          if blocked:
+              raise SystemExit("CodeQL gate failed: " + ", ".join(sorted(set(blocked))))
+          PY
+      - name: Preserve CodeQL SARIF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-sarif
+          path: reports/codeql
+          if-no-files-found: warn
+          retention-days: 30
+
+  infrastructure:
+    name: IaC scan (Checkov)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan Terraform baseline controls
+        if: ${{ !inputs.demo_mode }}
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: terraform
+          framework: terraform
+          check: CKV_AWS_18,CKV_AWS_19,CKV_AWS_20,CKV_AWS_21,CKV_AWS_53,CKV_AWS_54,CKV_AWS_55,CKV_AWS_56,CKV_AWS_57,CKV2_AWS_6
+          output_format: cli,sarif
+          output_file_path: console,reports/checkov.sarif
+          soft_fail: false
+          compact: true
+      - name: Scan insecure Terraform training fixture
+        if: inputs.demo_mode
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: security-demos/terraform
+          framework: terraform
+          output_format: cli,sarif
+          output_file_path: console,reports/checkov-demo.sarif
+          soft_fail: false
+          compact: true
+      - name: Upload baseline Checkov SARIF
+        if: ${{ always() && !inputs.demo_mode }}
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: reports/checkov.sarif
+      - name: Upload demo Checkov SARIF
+        if: ${{ always() && inputs.demo_mode }}
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: reports/checkov-demo.sarif
+      - name: Preserve Checkov SARIF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkov-sarif
+          path: reports/checkov*.sarif
+          if-no-files-found: warn
+          retention-days: 30
+
+  container:
+    name: Container scan (Trivy)
+    runs-on: ubuntu-24.04
+    env:
+      IMAGE_REF: local/${{ inputs.image_name }}:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build baseline image
+        if: ${{ !inputs.demo_mode }}
+        run: docker build --tag "$IMAGE_REF" .
+      - name: Build insecure training image
+        if: inputs.demo_mode
+        run: docker build --file security-demos/Dockerfile.insecure --tag "$IMAGE_REF" security-demos
+      - name: Generate Trivy vulnerability report
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_REF }}
+          format: sarif
+          output: reports/trivy.sarif
+          severity: LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
+      - name: Enforce Trivy critical-vulnerability gate
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_REF }}
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          skip-setup-trivy: true
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: reports/trivy.sarif
+      - name: Preserve Trivy SARIF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-sarif
+          path: reports/trivy.sarif
+          if-no-files-found: warn
+          retention-days: 30
+
+  dependency_review:
+    name: Dependency change gate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Block newly introduced high or critical dependency risks
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          deny-licenses: GPL-3.0,AGPL-3.0
+
+  security_gate:
+    name: Security gate
+    if: always()
+    needs: [quality, gitleaks, codeql, infrastructure, container, dependency_review]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every applicable control to pass
+        env:
+          QUALITY: ${{ needs.quality.result }}
+          GITLEAKS: ${{ needs.gitleaks.result }}
+          CODEQL: ${{ needs.codeql.result }}
+          CHECKOV: ${{ needs.infrastructure.result }}
+          TRIVY: ${{ needs.container.result }}
+          DEPENDENCY_REVIEW: ${{ needs.dependency_review.result }}
+        run: |
+          failed=0
+          for result in "$QUALITY" "$GITLEAKS" "$CODEQL" "$CHECKOV" "$TRIVY" "$DEPENDENCY_REVIEW"; do
+            if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
+              echo "A required security control did not pass: $result"
+              failed=1
+            fi
+          done
+          exit "$failed"

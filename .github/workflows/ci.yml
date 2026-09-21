@@ -1,0 +1,28 @@
+name: DevSecOps CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      demo_mode:
+        description: "Run intentionally unsafe training fixtures; this run is expected to fail."
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+  security-events: write
+
+jobs:
+  security-pipeline:
+    name: Test, scan, and enforce security gates
+    uses: ./.github/workflows/reusable-security.yml
+    with:
+      image_name: devsecops-demo
+      demo_mode: ${{ inputs.demo_mode || false }}

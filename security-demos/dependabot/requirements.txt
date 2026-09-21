@@ -1,0 +1,3 @@
+# DEMO ONLY: unsupported Django version for Dependabot/dependency-review training.
+# This fixture is never installed or included in the Docker build.
+Django==1.11.0

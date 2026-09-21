@@ -1,0 +1,2 @@
+# Baseline image vulnerabilities are not accepted here. This file exists so a
+# real application has a reviewed, auditable place for time-bounded exceptions.

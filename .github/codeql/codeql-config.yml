@@ -1,0 +1,7 @@
+name: "Python security baseline"
+queries:
+  - uses: security-extended
+paths:
+  - src
+paths-ignore:
+  - security-demos
