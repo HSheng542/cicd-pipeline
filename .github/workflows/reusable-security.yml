@@ -102,7 +102,7 @@ jobs:
           PY
       - name: Preserve CodeQL SARIF
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: codeql-sarif
           path: reports/codeql
@@ -149,7 +149,7 @@ jobs:
           sarif_file: reports/checkov-demo.sarif
       - name: Preserve Checkov SARIF
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: checkov-sarif
           path: reports/checkov*.sarif
@@ -196,7 +196,7 @@ jobs:
           sarif_file: reports/trivy.sarif
       - name: Preserve Trivy SARIF
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: trivy-sarif
           path: reports/trivy.sarif
