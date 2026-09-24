@@ -58,6 +58,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Create report directory
+        run: mkdir -p reports
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
@@ -112,6 +114,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Create report directory
+        run: mkdir -p reports
       - name: Scan Terraform baseline controls
         if: ${{ !inputs.demo_mode }}
         uses: bridgecrewio/checkov-action@v12
@@ -159,6 +163,8 @@ jobs:
       IMAGE_REF: local/${{ inputs.image_name }}:${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
+      - name: Create report directory
+        run: mkdir -p reports
       - name: Build baseline image
         if: ${{ !inputs.demo_mode }}
         run: docker build --tag "$IMAGE_REF" .
